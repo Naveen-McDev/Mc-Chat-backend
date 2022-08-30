@@ -1,83 +1,78 @@
-import User from "../models/user.js";
-import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
-import { createError } from "../utils/error.js";
+const User = require("../models/user");
+const generateToken = require("../config/generateToken");
 
-export const signup = async (req, res, next) => {
-  const { name, email, password } = req.body;
-  try {
-    if (!name || !email || !password)
-      return next(createError(400, "Please Enter all the Feilds"));
 
-    const userExists = await User.findOne({ email });
-    if (userExists) return next(createError(400, "User already exists"));
+const allUsers = async (req, res) => {
+  const keyword = req.query.search
+    ? {
+        $or: [
+          { name: { $regex: req.query.search, $options: "i" } },
+          { email: { $regex: req.query.search, $options: "i" } },
+        ],
+      }
+    : {};
 
-    const salt = bcrypt.genSaltSync(10);
-    const hash = bcrypt.hashSync(password, salt);
-    const newUser = new User({ ...req.body, password: hash });
+  const users = await User.find(keyword).find({ _id: { $ne: req.user._id } });
+  res.send(users);
+};
 
-    const user = await newUser.save();
-    const token = jwt.sign({ id: user._id }, process.env.JWT);
 
+const registerUser = async (req, res) => {
+  const { name, email, password, pic } = req.body;
+
+  if (!name || !email || !password) {
+    res.status(400);
+    throw new Error("Please Enter all the Feilds");
+  }
+
+  const userExists = await User.findOne({ email });
+
+  if (userExists) {
+    res.status(400);
+    throw new Error("User already exists");
+  }
+
+  const user = await User.create({
+    name,
+    email,
+    password,
+    pic,
+  });
+
+  if (user) {
     res.status(201).json({
       _id: user._id,
       name: user.name,
       email: user.email,
       isAdmin: user.isAdmin,
       pic: user.pic,
-      token: token,
+      token: generateToken(user._id),
     });
-  } catch (err) {
-    next(err);
+  } else {
+    res.status(400);
+    throw new Error("User not found");
   }
 };
 
-export const login = async (req, res, next) => {
+
+const authUser = async (req, res) => {
   const { email, password } = req.body;
-  try {
-    if (!email || !password)
-      return next(createError(400, "Please Enter all the Feilds"));
 
-    const user = await User.findOne({ email: req.body.email });
-    if (!user) return next(createError(404, "User not found!"));
+  const user = await User.findOne({ email });
 
-    const isCorrect = await bcrypt.compare(password, user.password);
-
-    if (!isCorrect) return next(createError(400, "Wrong Credentials!"));
-
-    const token = jwt.sign({ id: user._id }, process.env.JWT);
-    res.status(201).json({
+  if (user && (await user.matchPassword(password))) {
+    res.json({
       _id: user._id,
       name: user.name,
       email: user.email,
       isAdmin: user.isAdmin,
       pic: user.pic,
-      token: token,
+      token: generateToken(user._id),
     });
-  } catch (err) {
-    next(err);
+  } else {
+    res.status(401);
+    throw new Error("Invalid Email or Password");
   }
 };
 
-export const getAllUsers = async (req, res, next) => {
-  try {
-    const keyword = req.query.search
-      ? {
-          $or: [
-            {
-              name: { $regex: req.query.search, $options: "i" },
-            },
-            {
-              email: { $regex: req.query.search, $options: "i" },
-            },
-          ],
-        }
-      : {};
-
-    const user = await User.find(keyword).find({ _id: { $ne: req.user.id } });
-
-    res.status(200).json({ data: user });
-  } catch (error) {
-    next(error);
-  }
-};
+module.exports = { allUsers, registerUser, authUser };
